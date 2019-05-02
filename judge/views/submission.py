@@ -48,7 +48,7 @@ class SubmissionDetailBase(LoginRequiredMixin, TitleMixin, SubmissionMixin, Deta
             return submission
         if problem.is_editor(profile):
             return submission
-        if problem.is_public or problem.testers.filter(id=profile.id).exists():
+        if problem.testers.filter(id=profile.id).exists():
             if Submission.objects.filter(user_id=profile.id, result='AC', problem_id=problem.id,
                                          points=problem.points).exists():
                 return submission
