@@ -20,27 +20,19 @@ from judge.views.register import RegistrationView, ActivationView
 from judge.views.select2 import UserSelect2View, OrganizationSelect2View, ProblemSelect2View, CommentSelect2View, \
     ContestSelect2View, UserSearchSelect2View, ContestUserSearchSelect2View, TicketUserSelect2View, AssigneeSelect2View
 
+from django.views.generic.base import RedirectView
+
 admin.autodiscover()
 
 register_patterns = [
-    url(r'^activate/complete/$',
-        TitledTemplateView.as_view(template_name='registration/activation_complete.html',
-                                   title='Activation Successful!'),
-        name='registration_activation_complete'),
-    # Activation keys get matched by \w+ instead of the more specific
-    # [a-fA-F0-9]{40} because a bad activation key should still get to the view;
-    # that way it can return a sensible "invalid key" message instead of a
-    # confusing 404.
-    url(r'^activate/(?P<activation_key>\w+)/$',
-        ActivationView.as_view(title='Activation key invalid'),
-        name='registration_activate'),
     url(r'^register/$',
         RegistrationView.as_view(title='Register'),
         name='registration_register'),
     url(r'^register/complete/$',
-        TitledTemplateView.as_view(template_name='registration/registration_complete.html',
-                                   title='Registration Completed'),
+        RedirectView.as_view(url='/', permanent=False),
+                              title='Registration Completed'),
         name='registration_complete'),
+
     url(r'^register/closed/$',
         TitledTemplateView.as_view(template_name='registration/registration_closed.html',
                                    title='Registration not allowed'),

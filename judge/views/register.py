@@ -8,8 +8,7 @@ from django.contrib.auth.password_validation import get_default_password_validat
 from django.forms import ChoiceField, ModelChoiceField
 from django.shortcuts import render
 from django.utils.translation import gettext, gettext_lazy as _
-from registration.backends.default.views import (RegistrationView as OldRegistrationView,
-                                                 ActivationView as OldActivationView)
+from registration.backends.simple.views import RegistrationView as OldRegistrationView
 from registration.forms import RegistrationForm
 from sortedm2m.forms import SortedMultipleChoiceField
 
@@ -21,6 +20,7 @@ from judge.widgets import Select2Widget, Select2MultipleWidget
 valid_id = re.compile(r'^\w+$')
 bad_mail_regex = list(map(re.compile, getattr(settings, 'BAD_MAIL_PROVIDER_REGEX', ())))
 
+registration_password_regex = getattr(settings, 'REGISTRATION_PASSWORD', '^REGISTRATION_PASSWORD$')
 
 class CustomRegistrationForm(RegistrationForm):
     username = forms.RegexField(regex=r'^\w+$', max_length=30, label=_('Username'),
@@ -31,8 +31,10 @@ class CustomRegistrationForm(RegistrationForm):
     language = ModelChoiceField(queryset=Language.objects.all(), label=_('Preferred language'), empty_label=None,
                                 widget=Select2Widget(attrs={'style': 'width:100%'}))
     organizations = SortedMultipleChoiceField(queryset=Organization.objects.filter(is_open=True),
-                                              label=_('Organizations'), required=False,
+                                              label=_('Organizations'), required=True,
                                               widget=Select2MultipleWidget(attrs={'style': 'width:100%'}))
+    registration_password = forms.RegexField(regex=registration_password_regex, max_length=50, label=_('Registration password'),
+                                             error_messages={'invalid': _('Invalid registration password.')})
 
     if newsletter_id is not None:
         newsletter = forms.BooleanField(label=_('Subscribe to newsletter?'), initial=True, required=False)
@@ -88,18 +90,8 @@ class RegistrationView(OldRegistrationView):
         initial = super(RegistrationView, self).get_initial(*args, **kwargs)
         initial['timezone'] = getattr(settings, 'DEFAULT_USER_TIME_ZONE', 'America/Toronto')
         initial['language'] = Language.objects.get(key=getattr(settings, 'DEFAULT_USER_LANGUAGE', 'PY2'))
+        initial['organizations'] = [ Organizations.objects.get('Default') ]
         return initial
-
-
-class ActivationView(OldActivationView):
-    title = _('Registration')
-    template_name = 'registration/activate.html'
-
-    def get_context_data(self, **kwargs):
-        if 'title' not in kwargs:
-            kwargs['title'] = self.title
-        return super(ActivationView, self).get_context_data(**kwargs)
-
 
 def social_auth_error(request):
     return render(request, 'generic-message.html', {
