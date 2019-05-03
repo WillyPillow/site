@@ -186,6 +186,12 @@
             <div class="block-header">{{ _('Affiliated organizations') }}</div>
             {{ form.organizations }}
 
+            <div class="block-header">{{ _('Registration password') }}</div>
+            <span class="fullwidth{% if form.registration_password.errors %}-error{% endif %}">{{ form.registration_password }}</span>
+            {% if form.registration_password.errors %}
+                <div class="form-field-error">{{ form.registration_password.errors }}</div>
+            {% endif %}
+
             {% if form.newsletter %}
                 <div style="padding-top: 0.5em;">{{ form.newsletter }}
                     <label for="id_newsletter" style="float: unset;"

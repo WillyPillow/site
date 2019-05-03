@@ -16,7 +16,7 @@ from judge.views import organization, language, status, blog, problem, mailgun, 
     submission, widgets, comment, contests, api, ranked_submission, stats, preview, ticket, totp
 from judge.views.problem_data import ProblemDataView, ProblemSubmissionDiff, \
     problem_data_file, problem_init_view
-from judge.views.register import RegistrationView, ActivationView
+from judge.views.register import RegistrationView
 from judge.views.select2 import UserSelect2View, OrganizationSelect2View, ProblemSelect2View, CommentSelect2View, \
     ContestSelect2View, UserSearchSelect2View, ContestUserSearchSelect2View, TicketUserSelect2View, AssigneeSelect2View
 
@@ -30,7 +30,6 @@ register_patterns = [
         name='registration_register'),
     url(r'^register/complete/$',
         RedirectView.as_view(url='/', permanent=False),
-                              title='Registration Completed'),
         name='registration_complete'),
 
     url(r'^register/closed/$',

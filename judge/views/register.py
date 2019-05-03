@@ -90,7 +90,7 @@ class RegistrationView(OldRegistrationView):
         initial = super(RegistrationView, self).get_initial(*args, **kwargs)
         initial['timezone'] = getattr(settings, 'DEFAULT_USER_TIME_ZONE', 'America/Toronto')
         initial['language'] = Language.objects.get(key=getattr(settings, 'DEFAULT_USER_LANGUAGE', 'PY2'))
-        initial['organizations'] = [ Organizations.objects.get('Default') ]
+        initial['organizations'] = [ Organization.objects.get(name='Default') ]
         return initial
 
 def social_auth_error(request):
