@@ -12,9 +12,19 @@ class LogUserAccessMiddleware(object):
         if (hasattr(request, 'user') and request.user.is_authenticated and
                 not getattr(request, 'no_profile_update', False)):
             updates = {'last_access': now()}
-            # Decided on using REMOTE_ADDR as nginx will translate it to the external IP that hits it.
-            if request.META.get('REMOTE_ADDR'):
-                updates['ip'] = request.META.get('REMOTE_ADDR')
+            def get_client_ip(request):
+                x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+                if x_forwarded_for:
+                    ip = x_forwarded_for.split(',')[0]
+                elif request.META.get('REMOTE_ADDR'):
+                    ip = request.META.get('REMOTE_ADDR')
+                else:
+                    ip = None
+                return ip
+
+            ip = get_client_ip(request)
+            if ip:
+                updates['ip'] = ip
             Profile.objects.filter(user_id=request.user.pk).update(**updates)
 
         return response
