@@ -5,6 +5,22 @@
     {% compress js %}
         {{ form.media.js }}
         <script type="text/javascript">
+            function process_file(e) {
+                    var code = e.target.result;
+                    var source = $('textarea#id_source');
+                    window.previous_template = code;
+                    source.val(code);
+                    window.ace_editor.getSession().setValue(code);
+            }
+
+            function update_submit_area(form) {
+                    var file = form.uploadfile.files[0];
+                    var reader = new FileReader();
+                    reader.readAsText(file);
+                    var code = reader.result;
+                    $(reader).on('load', process_file);
+            }
+
             $(function () {
                 function format(state) {
                     if (!state.id) return state.text; // optgroup
@@ -12,6 +28,13 @@
                 }
 
                 window.previous_template = '';
+
+                function update_submit_area(code) {
+                    var source = $('textarea#id_source');
+                    window.previous_template = code;
+                    source.val(code);
+                    window.ace_editor.getSession().setValue(code);
+                }
 
                 function update_language_template() {
                     var source = $('textarea#id_source');
@@ -244,6 +267,10 @@
                 </div>
             {% endif %}
         </div>
+
+        <hr>
+
+        <input type="file" id="uploadfile" name="uploadfile" onchange="update_submit_area(this.form)">
 
         <hr>
 
