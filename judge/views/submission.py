@@ -15,6 +15,9 @@ from django.utils.safestring import mark_safe
 from django.utils.translation import gettext as _, gettext_lazy
 from django.views.decorators.http import require_POST
 from django.views.generic import ListView, DetailView
+from django.db import connection
+
+from dmoj import settings
 
 from judge import event_poster as event
 from judge.highlight_code import highlight_code
@@ -389,11 +392,48 @@ class UserProblemSubmissions(ConditionalUserTabMixin, UserMixin, ProblemSubmissi
             return _("My submissions for %(problem)s") % {'problem': self.problem_name}
         return _("%(user)s's submissions for %(problem)s") % {'user': self.username, 'problem': self.problem_name}
 
+    def get_score(self):
+        cursor = connection.cursor()
+        deadline = getattr(settings, 'DEADLINE_' + self.problem.code, '2999-01-01')
+        real_deadline = getattr(settings, 'REAL_DEADLINE_' + self.problem.code, '2999-01-01')
+        cursor.execute('''
+            SELECT auth_user.username,
+            MAX(
+                judge_submission.points *
+                    POW(
+                        0.8,
+                        GREATEST(
+                            DATEDIFF(judge_submission.date, CAST('%s' AS DATETIME)),
+                            0
+                        )
+                    )
+            )
+            FROM judge_submission
+            JOIN judge_profile
+                ON judge_profile.id = judge_submission.user_id
+            JOIN auth_user
+                ON judge_profile.user_id = auth_user.id
+            WHERE judge_submission.problem_id = %s
+                AND judge_submission.date < CAST('%s' AS DATETIME)
+                AND judge_submission.user_id = %s
+                AND NOT EXISTS (
+                    SELECT id
+                    FROM auth_user_groups
+                    WHERE auth_user_groups.user_id = auth_user.id
+                        AND group_id = 2
+                )
+            GROUP BY judge_submission.user_id;
+        ''' % (deadline, self.problem.id, real_deadline, self.profile.id))
+        data = [score for (user, score) in cursor.fetchall()]
+        cursor.close()
+        return 0 if len(data) == 0 else data[0]
+
     def get_content_title(self):
         if self.request.user.is_authenticated and self.request.user.profile == self.profile:
-            return format_html('''My submissions for <a href="{3}">{2}</a>''',
+            return format_html('''My submissions for <a href="{3}">{2}</a> ({4})''',
                                self.username, reverse('user_page', args=[self.username]),
-                               self.problem_name, reverse('problem_detail', args=[self.problem.code]))
+                               self.problem_name, reverse('problem_detail', args=[self.problem.code]),
+                               self.get_score())
         return format_html('''<a href="{1}">{0}</a>'s submissions for <a href="{3}">{2}</a>''',
                            self.username, reverse('user_page', args=[self.username]),
                            self.problem_name, reverse('problem_detail', args=[self.problem.code]))
