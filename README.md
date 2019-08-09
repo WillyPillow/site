@@ -1,3 +1,18 @@
+This is a DMOJ fork for the [NTU DSA course of spring 2019](http://mirlab.org/jang/courses/dsa/index.asp), with the following features:
+
+1. Show on the "My Submission" page the score a student will get after taking into account late penalties.
+1. Not showing others' source code even for AC'd users (for homework assignments).
+1. Use a pre-shared registration password and remove email verification (for simplicity).
+1. Use English instead of Simplfied Chinese for Traditional Chinese browsers (lest some students complain).
+1. Use HTTP_X_FORWARDED_FOR for user IP (since the instance is behind a reverse proxy).
+1. Ability to submit via uploading source files.
+1. Forget password link removed (since no mail server is used, and the link created a lot of confusion).
+
+I might create PRs to (attempt to) upstream some of these changes (especially 2, 3, 5, and 6) once I clean them up and create proper configuration to interact with them.
+
+Original README
+=====
+
 DMOJ Site [![Documentation Status](https://readthedocs.org/projects/dmoj/badge/?version=latest)](http://dmoj.readthedocs.org/en/latest/?badge=latest) [![Slack](https://slack.dmoj.ca/badge.svg)](https://slack.dmoj.ca)
 =====
 Django [AGPLv3](https://github.com/DMOJ/site/blob/master/LICENSE) contest judge frontend for the [DMOJ judge](https://github.com/DMOJ/judge) system. See it live at https://dmoj.ca/.
