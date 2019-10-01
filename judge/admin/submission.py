@@ -10,11 +10,11 @@ from django.db.models import Q
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.utils.html import format_html
-from django.utils.translation import gettext_lazy as _, pgettext, gettext, ungettext
+from django.utils.translation import gettext, gettext_lazy as _, pgettext, ungettext
 
 from django_ace import AceWidget
-from judge.models import Submission, SubmissionTestCase, ContestSubmission, ContestParticipation, ContestProblem, \
-    Profile
+from judge.models import ContestParticipation, ContestProblem, ContestSubmission, Profile, Submission, \
+    SubmissionSource, SubmissionTestCase
 from judge.utils.raw_sql import use_straight_join
 
 
@@ -78,22 +78,38 @@ class ContestSubmissionInline(admin.StackedInline):
                 kwargs['queryset'] = ContestParticipation.objects.filter(user=submission.user,
                                                                          contest__problems=submission.problem) \
                     .only('id', 'contest__name')
-                label = lambda obj: obj.contest.name
+
+                def label(obj):
+                    return obj.contest.name
             elif db_field.name == 'problem':
                 kwargs['queryset'] = ContestProblem.objects.filter(problem=submission.problem) \
                     .only('id', 'problem__name', 'contest__name')
-                label = lambda obj: pgettext('contest problem', '%(problem)s in %(contest)s') % {
-                    'problem': obj.problem.name, 'contest': obj.contest.name
-                }
+
+                def label(obj):
+                    return pgettext('contest problem', '%(problem)s in %(contest)s') % {
+                        'problem': obj.problem.name, 'contest': obj.contest.name,
+                    }
         field = super(ContestSubmissionInline, self).formfield_for_dbfield(db_field, **kwargs)
         if label is not None:
             field.label_from_instance = label
         return field
 
 
+class SubmissionSourceInline(admin.StackedInline):
+    fields = ('source',)
+    model = SubmissionSource
+    can_delete = False
+    extra = 0
+
+    def get_formset(self, request, obj=None, **kwargs):
+        kwargs.setdefault('widgets', {})['source'] = AceWidget(mode=obj and obj.language.ace,
+                                                               theme=request.profile.ace_theme)
+        return super().get_formset(request, obj, **kwargs)
+
+
 class SubmissionAdmin(admin.ModelAdmin):
     readonly_fields = ('user', 'problem', 'date')
-    fields = ('user', 'problem', 'date', 'time', 'memory', 'points', 'language', 'source', 'status', 'result',
+    fields = ('user', 'problem', 'date', 'time', 'memory', 'points', 'language', 'status', 'result',
               'case_points', 'case_total', 'judged_on', 'error')
     actions = ('judge', 'recalculate_score')
     list_display = ('id', 'problem_code', 'problem_name', 'user_column', 'execution_time', 'pretty_memory',
@@ -102,16 +118,16 @@ class SubmissionAdmin(admin.ModelAdmin):
     search_fields = ('problem__code', 'problem__name', 'user__user__username')
     actions_on_top = True
     actions_on_bottom = True
-    inlines = [SubmissionTestCaseInline, ContestSubmissionInline]
+    inlines = [SubmissionSourceInline, SubmissionTestCaseInline, ContestSubmissionInline]
 
     def get_queryset(self, request):
         queryset = Submission.objects.select_related('problem', 'user__user', 'language').only(
             'problem__code', 'problem__name', 'user__user__username', 'language__name',
-            'time', 'memory', 'points', 'status', 'result'
+            'time', 'memory', 'points', 'status', 'result',
         )
         use_straight_join(queryset)
         if not request.user.has_perm('judge.edit_all_problem'):
-            id = request.user.profile.id
+            id = request.profile.id
             queryset = queryset.filter(Q(problem__authors__id=id) | Q(problem__curators__id=id)).distinct()
         return queryset
 
@@ -123,7 +139,7 @@ class SubmissionAdmin(admin.ModelAdmin):
             return False
         if request.user.has_perm('judge.edit_all_problem') or obj is None:
             return True
-        return obj.problem.is_editor(request.user.profile)
+        return obj.problem.is_editor(request.profile)
 
     def lookup_allowed(self, key, value):
         return super(SubmissionAdmin, self).lookup_allowed(key, value) or key in ('problem__code',)
@@ -140,11 +156,11 @@ class SubmissionAdmin(admin.ModelAdmin):
                               level=messages.ERROR)
             return
         if not request.user.has_perm('judge.edit_all_problem'):
-            id = request.user.profile.id
+            id = request.profile.id
             queryset = queryset.filter(Q(problem__authors__id=id) | Q(problem__curators__id=id))
         judged = len(queryset)
         for model in queryset:
-            model.judge(rejudge=True)
+            model.judge(rejudge=True, batch_rejudge=True)
         self.message_user(request, ungettext('%d submission was successfully scheduled for rejudging.',
                                              '%d submissions were successfully scheduled for rejudging.',
                                              judged) % judged)
@@ -220,21 +236,16 @@ class SubmissionAdmin(admin.ModelAdmin):
     judge_column.short_description = ''
 
     def get_urls(self):
-        return [url(r'^(\d+)/judge/$', self.judge_view, name='judge_submission_rejudge')] + \
-               super(SubmissionAdmin, self).get_urls()
+        return [
+            url(r'^(\d+)/judge/$', self.judge_view, name='judge_submission_rejudge'),
+        ] + super(SubmissionAdmin, self).get_urls()
 
     def judge_view(self, request, id):
         if not request.user.has_perm('judge.rejudge_submission') or not request.user.has_perm('judge.edit_own_problem'):
             raise PermissionDenied()
         submission = get_object_or_404(Submission, id=id)
         if not request.user.has_perm('judge.edit_all_problem') and \
-                not submission.problem.is_editor(request.user.profile):
+                not submission.problem.is_editor(request.profile):
             raise PermissionDenied()
         submission.judge(rejudge=True)
         return HttpResponseRedirect(request.META.get('HTTP_REFERER', '/'))
-
-    def get_form(self, request, obj=None, **kwargs):
-        form = super(SubmissionAdmin, self).get_form(request, obj, **kwargs)
-        if obj is not None:
-            form.base_fields['source'].widget = AceWidget(obj.language.ace, request.user.profile.ace_theme)
-        return form

@@ -7,7 +7,7 @@ from django.core.cache import cache
 from django.utils.functional import SimpleLazyObject, new_method_proxy
 
 from judge.utils.caniuse import CanIUse, SUPPORT
-from .models import Profile, MiscConfig, NavigationBar
+from .models import MiscConfig, NavigationBar, Profile
 
 
 class FixedSimpleLazyObject(SimpleLazyObject):
@@ -114,7 +114,7 @@ def math_setting(request):
     caniuse = CanIUse(request.META.get('HTTP_USER_AGENT', ''))
 
     if request.user.is_authenticated:
-        engine = request.user.profile.math_engine
+        engine = request.profile.math_engine
     else:
         engine = getattr(settings, 'MATHOID_DEFAULT_TYPE', 'auto')
     if engine == 'auto':

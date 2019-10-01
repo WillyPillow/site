@@ -2,30 +2,26 @@ import json
 
 from django import forms
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.core.exceptions import PermissionDenied, ImproperlyConfigured, ValidationError
-from django.http import Http404
-from django.http import HttpResponse
-from django.http import HttpResponseBadRequest
-from django.http import HttpResponseRedirect
-from django.http import JsonResponse
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
+from django.http import Http404, HttpResponse, HttpResponseBadRequest, HttpResponseRedirect, JsonResponse
+from django.shortcuts import get_object_or_404
 from django.template.defaultfilters import truncatechars
 from django.template.loader import get_template
-from django.urls import reverse
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.utils.functional import cached_property
 from django.utils.html import escape, format_html, linebreaks
 from django.utils.safestring import mark_safe
-from django.utils.translation import gettext_lazy, gettext as _
+from django.utils.translation import gettext as _, gettext_lazy
 from django.views import View
-from django.views.generic import FormView, ListView
+from django.views.generic import ListView
 from django.views.generic.detail import SingleObjectMixin
 
 from judge import event_poster as event
-from judge.models import Profile
-from judge.models import Ticket, TicketMessage, Problem
+from judge.models import Problem, Profile, Ticket, TicketMessage
 from judge.utils.diggpaginator import DiggPaginator
-from judge.utils.tickets import own_ticket_filter, filter_visible_tickets
-from judge.utils.views import TitleMixin, paginate_query_context
+from judge.utils.tickets import filter_visible_tickets, own_ticket_filter
+from judge.utils.views import SingleObjectFormView, TitleMixin, paginate_query_context
+from judge.views.problem import ProblemMixin
 from judge.widgets import HeavyPreviewPageDownWidget
 
 ticket_widget = (forms.Textarea() if HeavyPreviewPageDownWidget is None else
@@ -45,20 +41,10 @@ class TicketForm(forms.Form):
 
     def clean(self):
         if self.request is not None and self.request.user.is_authenticated:
-            profile = self.request.user.profile
+            profile = self.request.profile
             if profile.mute:
                 raise ValidationError(_('Your part is silent, little toad.'))
         return super(TicketForm, self).clean()
-
-
-class SingleObjectFormView(SingleObjectMixin, FormView):
-    def post(self, request, *args, **kwargs):
-        self.object = self.get_object()
-        return super(SingleObjectFormView, self).post(request, *args, **kwargs)
-
-    def get(self, request, *args, **kwargs):
-        self.object = self.get_object()
-        return super(SingleObjectFormView, self).get(request, *args, **kwargs)
 
 
 class NewTicketView(LoginRequiredMixin, SingleObjectFormView):
@@ -74,7 +60,7 @@ class NewTicketView(LoginRequiredMixin, SingleObjectFormView):
         return kwargs
 
     def form_valid(self, form):
-        ticket = Ticket(user=self.request.user.profile, title=form.cleaned_data['title'])
+        ticket = Ticket(user=self.request.profile, title=form.cleaned_data['title'])
         ticket.linked_item = self.object
         ticket.save()
         message = TicketMessage(ticket=ticket, user=ticket.user, body=form.cleaned_data['body'])
@@ -89,10 +75,7 @@ class NewTicketView(LoginRequiredMixin, SingleObjectFormView):
         return HttpResponseRedirect(reverse('ticket', args=[ticket.id]))
 
 
-class NewProblemTicketView(TitleMixin, NewTicketView):
-    model = Problem
-    slug_field = 'code'
-    slug_url_kwarg = 'problem'
+class NewProblemTicketView(ProblemMixin, TitleMixin, NewTicketView):
     template_name = 'ticket/new_problem.html'
 
     def get_assignees(self):
@@ -106,6 +89,11 @@ class NewProblemTicketView(TitleMixin, NewTicketView):
                          format_html('<a href="{0}">{1}</a>', reverse('problem_detail', args=[self.object.code]),
                                      self.object.translated_name(self.request.LANGUAGE_CODE)))
 
+    def form_valid(self, form):
+        if not self.object.is_accessible_by(self.request.user):
+            raise Http404()
+        return super().form_valid(form)
+
 
 class TicketCommentForm(forms.Form):
     body = forms.CharField(widget=ticket_widget)
@@ -116,7 +104,7 @@ class TicketMixin(object):
 
     def get_object(self, queryset=None):
         ticket = super(TicketMixin, self).get_object(queryset)
-        profile_id = self.request.user.profile.id
+        profile_id = self.request.profile.id
         if self.request.user.has_perm('judge.change_ticket'):
             return ticket
         if ticket.user_id == profile_id:
@@ -135,7 +123,7 @@ class TicketView(TitleMixin, LoginRequiredMixin, TicketMixin, SingleObjectFormVi
     context_object_name = 'ticket'
 
     def form_valid(self, form):
-        message = TicketMessage(user=self.request.user.profile,
+        message = TicketMessage(user=self.request.profile,
                                 body=form.cleaned_data['body'],
                                 ticket=self.object)
         message.save()
@@ -152,7 +140,7 @@ class TicketView(TitleMixin, LoginRequiredMixin, TicketMixin, SingleObjectFormVi
 
     def get_context_data(self, **kwargs):
         context = super(TicketView, self).get_context_data(**kwargs)
-        context['messages'] = self.object.messages.select_related('user__user')
+        context['ticket_messages'] = self.object.messages.select_related('user__user')
         context['assignees'] = self.object.assignees.select_related('user')
         context['last_msg'] = event.last()
         return context
@@ -173,10 +161,10 @@ class TicketStatusChangeView(LoginRequiredMixin, TicketMixin, SingleObjectMixin,
                     'type': 'ticket-status', 'id': ticket.id,
                     'open': self.open, 'user': ticket.user_id,
                     'assignees': list(ticket.assignees.values_list('id', flat=True)),
-                    'title': ticket.title
+                    'title': ticket.title,
                 })
                 event.post('ticket-%d' % ticket.id, {
-                    'type': 'ticket-status', 'open': self.open
+                    'type': 'ticket-status', 'open': self.open,
                 })
         return HttpResponse(status=204)
 
@@ -185,10 +173,10 @@ class TicketNotesForm(forms.Form):
     notes = forms.CharField(widget=forms.Textarea(), required=False)
 
 
-class TicketNotesEditView(LoginRequiredMixin, TicketMixin, SingleObjectMixin, FormView):
+class TicketNotesEditView(LoginRequiredMixin, TicketMixin, SingleObjectFormView):
     template_name = 'ticket/edit-notes.html'
     form_class = TicketNotesForm
-    object = None
+    context_object_name = 'ticket'
 
     def get_initial(self):
         return {'notes': self.get_object().notes}
@@ -249,6 +237,8 @@ class TicketList(LoginRequiredMixin, ListView):
             queryset = filter_visible_tickets(queryset, self.user, self.profile)
         if self.filter_assignees:
             queryset = queryset.filter(assignees__user__username__in=self.filter_assignees)
+        if self.filter_users:
+            queryset = queryset.filter(user__user__username__in=self.filter_users)
         return queryset.distinct()
 
     def get_context_data(self, **kwargs):
@@ -285,13 +275,11 @@ class TicketList(LoginRequiredMixin, ListView):
 
 class ProblemTicketListView(TicketList):
     def _get_queryset(self):
-        if 'problem' not in self.kwargs:
-            raise Http404()
-        problem = Problem.objects.get(code=self.kwargs['problem'])
+        problem = get_object_or_404(Problem, code=self.kwargs.get('problem'))
         if problem.is_editable_by(self.request.user):
-            return problem.tickets.all()
+            return problem.tickets.order_by('-id')
         elif problem.is_accessible_by(self.request.user):
-            return problem.tickets.filter(own_ticket_filter(self.profile.id))
+            return problem.tickets.filter(own_ticket_filter(self.profile.id)).order_by('-id')
         raise Http404()
 
 
@@ -308,8 +296,8 @@ class TicketListDataAjax(TicketMixin, SingleObjectMixin, View):
             'notification': {
                 'title': _('New Ticket: %s') % ticket.title,
                 'body': '%s\n%s' % (_('#%(id)d, assigned to: %(users)s') % {
-                    'id': ticket.id, 'users': (_(', ').join(ticket.assignees.values_list('user__username', flat=True))
-                                               or _('no one')),
+                    'id': ticket.id,
+                    'users': (_(', ').join(ticket.assignees.values_list('user__username', flat=True)) or _('no one')),
                 }, truncatechars(message.body, 200)),
-            }
+            },
         })

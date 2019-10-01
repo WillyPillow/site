@@ -6,7 +6,7 @@ from django.utils.translation import gettext, gettext_lazy as _
 from reversion.admin import VersionAdmin
 
 from judge.models import Organization
-from judge.widgets import HeavySelect2MultipleWidget, HeavySelect2Widget, HeavyPreviewAdminPageDownWidget
+from judge.widgets import HeavyPreviewAdminPageDownWidget, HeavySelect2MultipleWidget, HeavySelect2Widget
 
 
 class OrganizationForm(ModelForm):
@@ -45,14 +45,14 @@ class OrganizationAdmin(VersionAdmin):
         if request.user.has_perm('judge.edit_all_organization'):
             return queryset
         else:
-            return queryset.filter(admins=request.user.profile.id)
+            return queryset.filter(admins=request.profile.id)
 
     def has_change_permission(self, request, obj=None):
         if not request.user.has_perm('judge.change_organization'):
             return False
         if request.user.has_perm('judge.edit_all_organization') or obj is None:
             return True
-        return obj.admins.filter(id=request.user.profile.id).exists()
+        return obj.admins.filter(id=request.profile.id).exists()
 
 
 class OrganizationRequestAdmin(admin.ModelAdmin):

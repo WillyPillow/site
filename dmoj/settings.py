@@ -10,7 +10,6 @@ https://docs.djangoproject.com/en/1.11/ref/settings/
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 import os
-import re
 
 from django.utils.translation import ugettext_lazy as _
 from django_jinja.builtins import DEFAULT_EXTENSIONS
@@ -113,7 +112,7 @@ else:
             'dashboard': {
                 'breadcrumbs': True,
             },
-        }
+        },
     }
 
 INSTALLED_APPS += (
@@ -143,9 +142,10 @@ INSTALLED_APPS += (
 )
 
 MIDDLEWARE = (
+    'judge.middleware.ShortCircuitMiddleware',
+    'django.middleware.common.CommonMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.locale.LocaleMiddleware',
-    'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'judge.middleware.DMOJLoginMiddleware',
@@ -202,6 +202,7 @@ TEMPLATES = [
                 'django.template.context_processors.tz',
                 'django.template.context_processors.i18n',
                 'django.template.context_processors.request',
+                'django.contrib.messages.context_processors.messages',
                 'judge.template_context.comet_location',
                 'judge.template_context.get_resource',
                 'judge.template_context.general_info',
@@ -238,7 +239,7 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
             ],
         },
-    }
+    },
 ]
 
 LOCALE_PATHS = [
@@ -305,7 +306,7 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
-    }
+    },
 }
 
 ENABLE_FTS = False
@@ -375,7 +376,7 @@ SOCIAL_AUTH_PIPELINE = (
     'judge.social_auth.make_profile',
     'social_core.pipeline.social_auth.associate_user',
     'social_core.pipeline.social_auth.load_extra_data',
-    'social_core.pipeline.user.user_details'
+    'social_core.pipeline.user.user_details',
 )
 
 SOCIAL_AUTH_GITHUB_SECURE_SCOPE = ['user:email']
@@ -386,6 +387,8 @@ SOCIAL_AUTH_SLUGIFY_FUNCTION = 'judge.social_auth.slugify_username'
 JUDGE_AMQP_PATH = None
 
 MOSS_API_KEY = None
+
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 
 try:
     with open(os.path.join(os.path.dirname(__file__), 'local_settings.py')) as f:

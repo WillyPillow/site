@@ -3,9 +3,9 @@ from operator import attrgetter
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericRelation
 from django.core.cache import cache
-from django.core.validators import RegexValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
-from django.db.models import F, QuerySet, CASCADE, SET_NULL
+from django.db.models import CASCADE, F, QuerySet, SET_NULL
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Coalesce
 from django.urls import reverse
@@ -13,10 +13,10 @@ from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 
 from judge.fulltext import SearchQuerySet
-from judge.models.profile import Profile, Organization
+from judge.models.profile import Organization, Profile
 from judge.models.runtime import Language
 from judge.user_translations import gettext as user_gettext
-from judge.utils.raw_sql import unique_together_left_join, RawSQLColumn
+from judge.utils.raw_sql import RawSQLColumn, unique_together_left_join
 
 __all__ = ['ProblemGroup', 'ProblemType', 'Problem', 'ProblemTranslation', 'ProblemClarification',
            'License', 'Solution', 'TranslatedProblemQuerySet', 'TranslatedProblemForeignKeyQuerySet']
@@ -94,36 +94,50 @@ class TranslatedProblemForeignKeyQuerySet(QuerySet):
 
 class Problem(models.Model):
     code = models.CharField(max_length=20, verbose_name=_('problem code'), unique=True,
-                            validators=[RegexValidator('^[a-z0-9]+$', _('Problem code must be ^[a-z0-9]+$'))])
-    name = models.CharField(max_length=100, verbose_name=_('problem name'), db_index=True)
+                            validators=[RegexValidator('^[a-z0-9]+$', _('Problem code must be ^[a-z0-9]+$'))],
+                            help_text=_('A short, unique code for the problem, '
+                                        'used in the url after /problem/'))
+    name = models.CharField(max_length=100, verbose_name=_('problem name'), db_index=True,
+                            help_text=_('The full name of the problem, '
+                                        'as shown in the problem list.'))
     description = models.TextField(verbose_name=_('problem body'))
-    authors = models.ManyToManyField(Profile, verbose_name=_('creators'), blank=True, related_name='authored_problems')
+    authors = models.ManyToManyField(Profile, verbose_name=_('creators'), blank=True, related_name='authored_problems',
+                                     help_text=_('These users will be able to edit the problem, '
+                                                 'and be listed as authors.'))
     curators = models.ManyToManyField(Profile, verbose_name=_('curators'), blank=True, related_name='curated_problems',
-                                      help_text=_('These users will be able to edit a problem, '
-                                                  'but not be publicly shown as an author.'))
+                                      help_text=_('These users will be able to edit the problem, '
+                                                  'but not be listed as authors.'))
     testers = models.ManyToManyField(Profile, verbose_name=_('testers'), blank=True, related_name='tested_problems',
                                      help_text=_(
-                                         'These users will be able to view a private problem, but not edit it.'))
-    types = models.ManyToManyField(ProblemType, verbose_name=_('problem types'))
-    group = models.ForeignKey(ProblemGroup, verbose_name=_('problem group'), on_delete=CASCADE)
+                                         'These users will be able to view the private problem, but not edit it.'))
+    types = models.ManyToManyField(ProblemType, verbose_name=_('problem types'),
+                                   help_text=_('The type of problem, '
+                                               "as shown on the problem's page."))
+    group = models.ForeignKey(ProblemGroup, verbose_name=_('problem group'), on_delete=CASCADE,
+                              help_text=_('The group of problem, shown under Category in the problem list.'))
     time_limit = models.FloatField(verbose_name=_('time limit'),
                                    help_text=_('The time limit for this problem, in seconds. '
-                                               'Fractional seconds (e.g. 1.5) are supported.'))
-    memory_limit = models.IntegerField(verbose_name=_('memory limit'),
-                                       help_text=_('The memory limit for this problem, in kilobytes '
-                                                   '(e.g. 64mb = 65536 kilobytes).'))
+                                               'Fractional seconds (e.g. 1.5) are supported.'),
+                                   validators=[MinValueValidator(0), MaxValueValidator(2000)])
+    memory_limit = models.PositiveIntegerField(verbose_name=_('memory limit'),
+                                               help_text=_('The memory limit for this problem, in kilobytes '
+                                                           '(e.g. 64mb = 65536 kilobytes).'))
     short_circuit = models.BooleanField(default=False)
-    points = models.FloatField(verbose_name=_('points'))
+    points = models.FloatField(verbose_name=_('points'),
+                               help_text=_('Points awarded for problem completion. '
+                                           "Points are displayed with a 'p' suffix if partial."))
     partial = models.BooleanField(verbose_name=_('allows partial points'), default=False)
-    allowed_languages = models.ManyToManyField(Language, verbose_name=_('allowed languages'))
+    allowed_languages = models.ManyToManyField(Language, verbose_name=_('allowed languages'),
+                                               help_text=_('List of allowed submission languages.'))
     is_public = models.BooleanField(verbose_name=_('publicly visible'), db_index=True, default=False)
     is_manually_managed = models.BooleanField(verbose_name=_('manually managed'), db_index=True, default=False,
-                                              help_text=_('Whether judges should be allowed to manage data or not'))
+                                              help_text=_('Whether judges should be allowed to manage data or not.'))
     date = models.DateTimeField(verbose_name=_('date of publishing'), null=True, blank=True, db_index=True,
                                 help_text=_("Doesn't have magic ability to auto-publish due to backward compatibility"))
     banned_users = models.ManyToManyField(Profile, verbose_name=_('personae non gratae'), blank=True,
                                           help_text=_('Bans the selected users from submitting to this problem.'))
-    license = models.ForeignKey(License, null=True, blank=True, on_delete=SET_NULL)
+    license = models.ForeignKey(License, null=True, blank=True, on_delete=SET_NULL,
+                                help_text=_('The license under which this problem is published.'))
     og_image = models.CharField(verbose_name=_('OpenGraph image'), max_length=150, blank=True)
     summary = models.TextField(blank=True, verbose_name=_('problem summary'),
                                help_text=_('Plain-text, shown in meta description tag, e.g. for social media.'))
@@ -159,7 +173,7 @@ class Problem(models.Model):
             return False
         if user.has_perm('judge.edit_all_problem') or user.has_perm('judge.edit_public_problem') and self.is_public:
             return True
-        return self.is_editor(user.profile)
+        return user.has_perm('judge.edit_own_problem') and self.is_editor(user.profile)
 
     def is_accessible_by(self, user):
         # Problem is public.
@@ -198,6 +212,9 @@ class Problem(models.Model):
             return False
         from judge.models import ContestProblem
         return ContestProblem.objects.filter(problem_id=self.id, contest__users__id=current).exists()
+
+    def is_subs_manageable_by(self, user):
+        return user.is_staff and user.has_perm('judge.rejudge_submission_lot') and self.is_editable_by(user)
 
     def __str__(self):
         return self.name
@@ -254,8 +271,11 @@ class Problem(models.Model):
         self.user_count = self.submission_set.filter(points__gte=self.points, result='AC',
                                                      user__is_unlisted=False).values('user').distinct().count()
         submissions = self.submission_set.count()
-        self.ac_rate = 100.0 * self.submission_set.filter(points__gte=self.points, result='AC',
-                                                          user__is_unlisted=False).count() / submissions if submissions else 0
+        if submissions:
+            self.ac_rate = 100.0 * self.submission_set.filter(points__gte=self.points, result='AC',
+                                                              user__is_unlisted=False).count() / submissions
+        else:
+            self.ac_rate = 0
         self.save()
 
     update_stats.alters_data = True

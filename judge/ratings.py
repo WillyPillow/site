@@ -74,7 +74,8 @@ def recalculate_ratings(old_rating, old_volatility, actual_rank, times_rated):
         if times_rated[i] == 0:
             new_volatility[i] = 385
         else:
-            new_volatility[i] = math.sqrt(((new_rating[i] - old_rating[i]) ** 2) / Weight + (old_volatility[i] ** 2) / (Weight + 1))
+            new_volatility[i] = math.sqrt(((new_rating[i] - old_rating[i]) ** 2) / Weight +
+                                          (old_volatility[i] ** 2) / (Weight + 1))
         if abs(old_rating[i] - new_rating[i]) > Cap:
             if old_rating[i] < new_rating[i]:
                 new_rating[i] = old_rating[i] + Cap
@@ -121,6 +122,10 @@ def rate_contest(contest):
                    .values_list('id', 'user_id', 'score', 'cumtime')
     if not contest.rate_all:
         users = users.filter(submissions__gt=0)
+    if contest.rating_floor is not None:
+        users = users.exclude(user__rating__lt=contest.rating_floor)
+    if contest.rating_ceiling is not None:
+        users = users.exclude(user__rating__gt=contest.rating_ceiling)
     users = list(tie_ranker(users, key=itemgetter(2, 3)))
     participation_ids = [user[1][0] for user in users]
     user_ids = [user[1][1] for user in users]

@@ -10,9 +10,9 @@ from django.contrib.auth.models import Permission
 from django.contrib.auth.views import redirect_to_login
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
-from django.db.models import Max, Count, Min
+from django.db.models import Count, Max, Min
 from django.http import Http404, HttpResponseRedirect, JsonResponse
-from django.shortcuts import render, get_object_or_404
+from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.formats import date_format
@@ -23,15 +23,15 @@ from django.views.generic import DetailView, ListView, TemplateView
 from reversion import revisions
 
 from judge.forms import ProfileForm, newsletter_id
-from judge.models import Profile, Submission, Rating
-from judge.performance_points import get_pp_breakdown, PP_ENTRIES
+from judge.models import Profile, Rating, Submission
+from judge.performance_points import PP_ENTRIES, get_pp_breakdown
 from judge.ratings import rating_class, rating_progress
 from judge.utils.problems import contest_completed_ids, user_completed_ids
 from judge.utils.ranker import ranker
 from judge.utils.subscription import Subscription
 from judge.utils.unicode import utf8text
-from judge.utils.views import TitleMixin, generic_message, DiggPaginatorMixin, QueryStringSortMixin
-from .contests import contest_ranking_view
+from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, TitleMixin, generic_message
+from .contests import ContestRanking
 
 __all__ = ['UserPage', 'UserAboutPage', 'UserProblemsPage', 'users', 'edit_profile']
 
@@ -55,7 +55,7 @@ class UserPage(TitleMixin, UserMixin, DetailView):
 
     def get_object(self, queryset=None):
         if self.kwargs.get(self.slug_url_kwarg, None) is None:
-            return self.request.user.profile
+            return self.request.profile
         return super(UserPage, self).get_object(queryset)
 
     def dispatch(self, request, *args, **kwargs):
@@ -77,7 +77,7 @@ class UserPage(TitleMixin, UserMixin, DetailView):
     def profile(self):
         if not self.request.user.is_authenticated:
             return None
-        return self.request.user.profile
+        return self.request.profile
 
     @cached_property
     def in_contest(self):
@@ -93,14 +93,19 @@ class UserPage(TitleMixin, UserMixin, DetailView):
         context = super(UserPage, self).get_context_data(**kwargs)
 
         context['hide_solved'] = int(self.hide_solved)
-        context['authored'] = self.object.authored_problems.filter(is_public=True, is_organization_private=False).order_by('code')
+        context['authored'] = self.object.authored_problems.filter(is_public=True, is_organization_private=False) \
+                                  .order_by('code')
         rating = self.object.ratings.order_by('-contest__end_time')[:1]
         context['rating'] = rating[0] if rating else None
 
-        context['rank'] = Profile.objects.filter(is_unlisted=False, performance_points__gt=self.object.performance_points).count() + 1
+        context['rank'] = Profile.objects.filter(
+            is_unlisted=False, performance_points__gt=self.object.performance_points,
+        ).count() + 1
 
         if rating:
-            context['rating_rank'] = Profile.objects.filter(is_unlisted=False, rating__gt=self.object.rating).count() + 1
+            context['rating_rank'] = Profile.objects.filter(
+                is_unlisted=False, rating__gt=self.object.rating,
+            ).count() + 1
             context['rated_users'] = Profile.objects.filter(is_unlisted=False, rating__isnull=False).count()
         context.update(self.object.ratings.aggregate(min_rating=Min('rating'), max_rating=Max('rating'),
                                                      contests=Count('contest')))
@@ -130,7 +135,7 @@ class UserAboutPage(UserPage):
             'timestamp': (rating.contest.end_time - EPOCH).total_seconds() * 1000,
             'date': date_format(rating.contest.end_time, _('M j, Y, G:i')),
             'class': rating_class(rating.rating),
-            'height': '%.3fem' % rating_progress(rating.rating)
+            'height': '%.3fem' % rating_progress(rating.rating),
         } for rating in ratings]))
 
         if ratings:
@@ -139,7 +144,7 @@ class UserAboutPage(UserPage):
             min_ever, max_ever = global_data['rating__min'], global_data['rating__max']
             min_user, max_user = user_data['rating__min'], user_data['rating__max']
             delta = max_user - min_user
-            ratio = (max_ever - max_user + 0.0) / (max_ever - min_ever)
+            ratio = (max_ever - max_user) / (max_ever - min_ever) if max_ever != min_ever else 1.0
             context['max_graph'] = max_user + ratio * delta
             context['min_graph'] = min_user + ratio * delta - delta
         return context
@@ -166,7 +171,7 @@ class UserProblemsPage(UserPage):
             process_group(group, problems) for group, problems in itertools.groupby(
                 remap_keys(result, {
                     'problem__code': 'code', 'problem__name': 'name', 'problem__points': 'total',
-                    'problem__group__full_name': 'group'
+                    'problem__group__full_name': 'group',
                 }), itemgetter('group'))
         ]
         breakdown, has_more = get_pp_breakdown(self.object, start=0, end=10)
@@ -279,11 +284,19 @@ class UserList(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ListView):
 user_list_view = UserList.as_view()
 
 
+class FixedContestRanking(ContestRanking):
+    contest = None
+
+    def get_object(self, queryset=None):
+        return self.contest
+
+
 def users(request):
     if request.user.is_authenticated:
-        participation = request.user.profile.current_contest
+        participation = request.profile.current_contest
         if participation is not None:
-            return contest_ranking_view(request, participation.contest, participation)
+            contest = participation.contest
+            return FixedContestRanking.as_view(contest=contest)(request, contest=contest.key)
     return user_list_view(request)
 
 
@@ -294,7 +307,9 @@ def user_ranking_redirect(request):
         raise Http404()
     user = get_object_or_404(Profile, user__username=username)
     rank = Profile.objects.filter(is_unlisted=False, performance_points__gt=user.performance_points).count()
-    rank += Profile.objects.filter(is_unlisted=False, performance_points__exact=user.performance_points, id__lt=user.id).count()
+    rank += Profile.objects.filter(
+        is_unlisted=False, performance_points__exact=user.performance_points, id__lt=user.id,
+    ).count()
     page = rank // UserList.paginate_by
     return HttpResponseRedirect('%s%s#!%s' % (reverse('user_list'), '?page=%d' % (page + 1) if page else '', username))
 

@@ -7,15 +7,15 @@ from django.contrib.auth.forms import AuthenticationForm
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db.models import Q
-from django.forms import ModelForm, CharField, Form
+from django.forms import CharField, Form, ModelForm
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
 
 from django_ace import AceWidget
-from judge.models import Organization, Profile, Submission, PrivateMessage, Language
+from judge.models import Language, Organization, PrivateMessage, Problem, Profile, Submission
 from judge.utils.subscription import newsletter_id
-from judge.widgets import MathJaxPagedownWidget, HeavyPreviewPageDownWidget, PagedownWidget, \
-    Select2Widget, Select2MultipleWidget
+from judge.widgets import HeavyPreviewPageDownWidget, MathJaxPagedownWidget, PagedownWidget, Select2MultipleWidget, \
+    Select2Widget
 
 
 def fix_unicode(string, unsafe=tuple('\u202a\u202b\u202d\u202e')):
@@ -45,7 +45,7 @@ class ProfileForm(ModelForm):
         if HeavyPreviewPageDownWidget is not None:
             widgets['about'] = HeavyPreviewPageDownWidget(
                 preview=reverse_lazy('profile_preview'),
-                attrs={'style': 'max-width:700px;min-width:700px;width:700px'}
+                attrs={'style': 'max-width:700px;min-width:700px;width:700px'},
             )
 
     def clean(self):
@@ -53,7 +53,8 @@ class ProfileForm(ModelForm):
         max_orgs = getattr(settings, 'DMOJ_USER_MAX_ORGANIZATION_COUNT', 3)
 
         if sum(org.is_open for org in organizations) > max_orgs:
-            raise ValidationError(_('You may not be part of more than {count} public organizations.').format(count=max_orgs))
+            raise ValidationError(
+                _('You may not be part of more than {count} public organizations.').format(count=max_orgs))
 
         return self.cleaned_data
 
@@ -62,7 +63,7 @@ class ProfileForm(ModelForm):
         super(ProfileForm, self).__init__(*args, **kwargs)
         if not user.has_perm('judge.edit_all_organization'):
             self.fields['organizations'].queryset = Organization.objects.filter(
-                Q(is_open=True) | Q(id__in=user.profile.organizations.all())
+                Q(is_open=True) | Q(id__in=user.profile.organizations.all()),
             )
 
 
@@ -79,7 +80,7 @@ class ProblemSubmitForm(ModelForm):
 
     class Meta:
         model = Submission
-        fields = ['problem', 'source', 'language']
+        fields = ['problem', 'language']
 
 
 class EditOrganizationForm(ModelForm):
@@ -127,7 +128,7 @@ class TOTPForm(Form):
     TOLERANCE = getattr(settings, 'DMOJ_TOTP_TOLERANCE_HALF_MINUTES', 1)
 
     totp_token = NoAutoCompleteCharField(validators=[
-        RegexValidator('^[0-9]{6}$', _('Two Factor Authentication tokens must be 6 decimal digits.'))
+        RegexValidator('^[0-9]{6}$', _('Two Factor Authentication tokens must be 6 decimal digits.')),
     ])
 
     def __init__(self, *args, **kwargs):
@@ -137,3 +138,13 @@ class TOTPForm(Form):
     def clean_totp_token(self):
         if not pyotp.TOTP(self.totp_key).verify(self.cleaned_data['totp_token'], valid_window=self.TOLERANCE):
             raise ValidationError(_('Invalid Two Factor Authentication token.'))
+
+
+class ProblemCloneForm(Form):
+    code = CharField(max_length=20, validators=[RegexValidator('^[a-z0-9]+$', _('Problem code must be ^[a-z0-9]+$'))])
+
+    def clean_code(self):
+        code = self.cleaned_data['code']
+        if Problem.objects.filter(code=code).exists():
+            raise ValidationError(_('Problem with code already exists.'))
+        return code

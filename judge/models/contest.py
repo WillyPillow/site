@@ -5,12 +5,12 @@ from django.db.models import CASCADE
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.functional import cached_property
-from django.utils.translation import gettext_lazy as _, gettext
+from django.utils.translation import gettext, gettext_lazy as _
 from jsonfield import JSONField
 
 from judge import contest_format
 from judge.models.problem import Problem
-from judge.models.profile import Profile, Organization
+from judge.models.profile import Organization, Profile
 from judge.models.submission import Submission
 
 __all__ = ['Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'ContestSubmission', 'Rating']
@@ -56,10 +56,10 @@ class Contest(models.Model):
     start_time = models.DateTimeField(verbose_name=_('start time'), db_index=True)
     end_time = models.DateTimeField(verbose_name=_('end time'), db_index=True)
     time_limit = models.DurationField(verbose_name=_('time limit'), blank=True, null=True)
-    is_public = models.BooleanField(verbose_name=_('publicly visible'), default=False,
-                                    help_text=_('Should be set even for organization-private contests, where it '
-                                                'determines whether the contest is visible to members of the '
-                                                'specified organizations.'))
+    is_visible = models.BooleanField(verbose_name=_('publicly visible'), default=False,
+                                     help_text=_('Should be set even for organization-private contests, where it '
+                                                 'determines whether the contest is visible to members of the '
+                                                 'specified organizations.'))
     is_rated = models.BooleanField(verbose_name=_('contest rated'), help_text=_('Whether this contest can be rated.'),
                                    default=False)
     hide_scoreboard = models.BooleanField(verbose_name=_('hide scoreboard'),
@@ -69,10 +69,17 @@ class Contest(models.Model):
     use_clarifications = models.BooleanField(verbose_name=_('no comments'),
                                              help_text=_("Use clarification system instead of comments."),
                                              default=True)
+    rating_floor = models.IntegerField(verbose_name=('rating floor'), help_text=_('Rating floor for contest'),
+                                       null=True, blank=True)
+    rating_ceiling = models.IntegerField(verbose_name=('rating ceiling'), help_text=_('Rating ceiling for contest'),
+                                         null=True, blank=True)
     rate_all = models.BooleanField(verbose_name=_('rate all'), help_text=_('Rate all users who joined.'), default=False)
     rate_exclude = models.ManyToManyField(Profile, verbose_name=_('exclude from ratings'), blank=True,
                                           related_name='rate_exclude+')
-    is_private = models.BooleanField(verbose_name=_('private to organizations'), default=False)
+    is_private = models.BooleanField(verbose_name=_('private to specific users'), default=False)
+    private_contestants = models.ManyToManyField(Profile, blank=True, verbose_name=_('private contestants'),
+                                                 help_text=_('If private, only these users may see the contest'),
+                                                 related_name='private_contestants+')
     hide_problem_tags = models.BooleanField(verbose_name=_('hide problem tags'),
                                             help_text=_('Whether problem tags should be hidden by default.'),
                                             default=False)
@@ -81,11 +88,14 @@ class Contest(models.Model):
                                                         'testcases. Commonly set during a contest, then unset '
                                                         'prior to rejudging user submissions when the contest ends.'),
                                             default=False)
+    is_organization_private = models.BooleanField(verbose_name=_('private to organizations'), default=False)
     organizations = models.ManyToManyField(Organization, blank=True, verbose_name=_('organizations'),
                                            help_text=_('If private, only these organizations may see the contest'))
     og_image = models.CharField(verbose_name=_('OpenGraph image'), default='', max_length=150, blank=True)
-    logo_override_image = models.CharField(verbose_name=_('Logo override image'), default='', max_length=150, blank=True,
-                                           help_text=_('This image will replace the default site logo for users inside the contest.'))
+    logo_override_image = models.CharField(verbose_name=_('Logo override image'), default='', max_length=150,
+                                           blank=True,
+                                           help_text=_('This image will replace the default site logo for users '
+                                                       'inside the contest.'))
     tags = models.ManyToManyField(ContestTag, verbose_name=_('contest tags'), blank=True, related_name='contests')
     user_count = models.IntegerField(verbose_name=_('the amount of live participants'), default=0)
     summary = models.TextField(blank=True, verbose_name=_('contest summary'),
@@ -111,26 +121,27 @@ class Contest(models.Model):
         return self.format_class(self, self.format_config)
 
     def clean(self):
-        if self.start_time >= self.end_time:
+        # Django will complain if you didn't fill in start_time or end_time, so we don't have to.
+        if self.start_time and self.end_time and self.start_time >= self.end_time:
             raise ValidationError('What is this? A contest that ended before it starts?')
         self.format_class.validate(self.format_config)
 
-    def is_in_contest(self, request):
-        if request.user.is_authenticated:
-            profile = request.user.profile
+    def is_in_contest(self, user):
+        if user.is_authenticated:
+            profile = user.profile
             return profile and profile.current_contest is not None and profile.current_contest.contest == self
         return False
 
-    def can_see_scoreboard(self, request):
-        if request.user.has_perm('judge.see_private_contest'):
+    def can_see_scoreboard(self, user):
+        if user.has_perm('judge.see_private_contest'):
             return True
-        if request.user.is_authenticated and self.organizers.filter(id=request.user.profile.id).exists():
+        if user.is_authenticated and self.organizers.filter(id=user.profile.id).exists():
             return True
-        if not self.is_public:
+        if not self.is_visible:
             return False
         if self.start_time is not None and self.start_time > timezone.now():
             return False
-        if self.hide_scoreboard and not self.is_in_contest(request) and self.end_time > timezone.now():
+        if self.hide_scoreboard and not self.is_in_contest(user) and self.end_time > timezone.now():
             return False
         return True
 
@@ -182,15 +193,18 @@ class Contest(models.Model):
         return True
 
     def is_accessible_by(self, user):
-        # Contest is public
-        if self.is_public:
-            # Contest is not private to an organization
-            if not self.is_private:
+        # Contest is publicly visible
+        if self.is_visible:
+            # Contest is not private
+            if not self.is_private and not self.is_organization_private:
                 return True
-            # User is in the organizations
-            if user.is_authenticated and \
-                    self.organizations.filter(id__in=user.profile.organizations.all()):
-                return True
+            if user.is_authenticated:
+                # User is in the organizations it is private to
+                if self.organizations.filter(id__in=user.profile.organizations.all()).exists():
+                    return True
+                # User is in the group of private contestants
+                if self.private_contestants.filter(id=user.profile.id).exists():
+                    return True
 
         # If the user can view all contests
         if user.has_perm('judge.see_private_contest'):
@@ -212,18 +226,22 @@ class Contest(models.Model):
             ('edit_all_contest', _('Edit all contests')),
             ('contest_rating', _('Rate contests')),
             ('contest_access_code', _('Contest access codes')),
+            ('create_private_contest', _('Create private contests')),
         )
         verbose_name = _('contest')
         verbose_name_plural = _('contests')
 
 
 class ContestParticipation(models.Model):
+    LIVE = 0
+    SPECTATE = -1
+
     contest = models.ForeignKey(Contest, verbose_name=_('associated contest'), related_name='users', on_delete=CASCADE)
     user = models.ForeignKey(Profile, verbose_name=_('user'), related_name='contest_history', on_delete=CASCADE)
     real_start = models.DateTimeField(verbose_name=_('start time'), default=timezone.now, db_column='start')
     score = models.IntegerField(verbose_name=_('score'), default=0, db_index=True)
     cumtime = models.PositiveIntegerField(verbose_name=_('cumulative time'), default=0)
-    virtual = models.IntegerField(verbose_name=_('virtual participation id'), default=0,
+    virtual = models.IntegerField(verbose_name=_('virtual participation id'), default=LIVE,
                                   help_text=_('0 means non-virtual, otherwise the n-th virtual participation'))
     format_data = JSONField(verbose_name=_('contest format specific data'), null=True, blank=True)
 
@@ -233,16 +251,16 @@ class ContestParticipation(models.Model):
 
     @property
     def live(self):
-        return self.virtual == 0
+        return self.virtual == self.LIVE
 
     @property
     def spectate(self):
-        return self.virtual == -1
+        return self.virtual == self.SPECTATE
 
     @cached_property
     def start(self):
         contest = self.contest
-        return contest.start_time if contest.time_limit is None and not self.virtual > 0 else self.real_start
+        return contest.start_time if contest.time_limit is None and (self.live or self.spectate) else self.real_start
 
     @cached_property
     def end_time(self):

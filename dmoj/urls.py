@@ -3,22 +3,26 @@ from django.conf.urls import include, url
 from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.contrib.sitemaps.views import sitemap
-from django.http import HttpResponsePermanentRedirect
+from django.http import Http404, HttpResponsePermanentRedirect
+from django.templatetags.static import static
 from django.urls import reverse
+from django.utils.functional import lazystr
 from django.utils.translation import ugettext_lazy as _
+from django.views.generic import RedirectView
 
-from judge.feed import CommentFeed, AtomCommentFeed, BlogFeed, AtomBlogFeed, ProblemFeed, AtomProblemFeed
+from judge.feed import AtomBlogFeed, AtomCommentFeed, AtomProblemFeed, BlogFeed, CommentFeed, ProblemFeed
 from judge.forms import CustomAuthenticationForm
-from judge.sitemap import ProblemSitemap, UserSitemap, HomePageSitemap, UrlSitemap, ContestSitemap, OrganizationSitemap, \
-    BlogPostSitemap, SolutionSitemap
-from judge.views import TitledTemplateView
-from judge.views import organization, language, status, blog, problem, mailgun, license, register, user, \
-    submission, widgets, comment, contests, api, ranked_submission, stats, preview, ticket, totp
+from judge.sitemap import BlogPostSitemap, ContestSitemap, HomePageSitemap, OrganizationSitemap, ProblemSitemap, \
+    SolutionSitemap, UrlSitemap, UserSitemap
+from judge.views import TitledTemplateView, api, blog, comment, contests, language, license, mailgun, organization, \
+    preview, problem, problem_manage, ranked_submission, register, stats, status, submission, tasks, ticket, totp, \
+    user, widgets
 from judge.views.problem_data import ProblemDataView, ProblemSubmissionDiff, \
     problem_data_file, problem_init_view
 from judge.views.register import RegistrationView
-from judge.views.select2 import UserSelect2View, OrganizationSelect2View, ProblemSelect2View, CommentSelect2View, \
-    ContestSelect2View, UserSearchSelect2View, ContestUserSearchSelect2View, TicketUserSelect2View, AssigneeSelect2View
+from judge.views.select2 import AssigneeSelect2View, CommentSelect2View, ContestSelect2View, \
+    ContestUserSearchSelect2View, OrganizationSelect2View, ProblemSelect2View, TicketUserSelect2View, \
+    UserSearchSelect2View, UserSelect2View
 
 from django.views.generic.base import RedirectView
 
@@ -40,15 +44,16 @@ register_patterns = [
         template_name='registration/login.html',
         extra_context={'title': _('Login')},
         authentication_form=CustomAuthenticationForm,
+        redirect_authenticated_user=True,
     ), name='auth_login'),
     url(r'^logout/$', user.UserLogoutView.as_view(), name='auth_logout'),
     url(r'^password/change/$', auth_views.PasswordChangeView.as_view(
-        template_name='registration/password_change_form.html'
+        template_name='registration/password_change_form.html',
     ), name='password_change'),
     url(r'^password/change/done/$', auth_views.PasswordChangeDoneView.as_view(
         template_name='registration/password_change_done.html',
     ), name='password_change_done'),
-    url(r'^password/reset/$',auth_views.PasswordResetView.as_view(
+    url(r'^password/reset/$', auth_views.PasswordResetView.as_view(
         template_name='registration/password_reset.html',
         html_email_template_name='registration/password_reset_email.html',
         email_template_name='registration/password_reset_email.txt',
@@ -72,6 +77,8 @@ register_patterns = [
 
 
 def exception(request):
+    if not request.user.is_superuser:
+        raise Http404()
     raise RuntimeError('@Xyene asked me to cause this')
 
 
@@ -99,7 +106,7 @@ urlpatterns = [
         url(r'^/raw$', problem.ProblemRaw.as_view(), name='problem_raw'),
         url(r'^/pdf$', problem.ProblemPdfView.as_view(), name='problem_pdf'),
         url(r'^/pdf/(?P<language>[a-z-]+)$', problem.ProblemPdfView.as_view(), name='problem_pdf'),
-        url(r'^/clone', problem.clone_problem, name='problem_clone'),
+        url(r'^/clone', problem.ProblemClone.as_view(), name='problem_clone'),
         url(r'^/submit$', problem.problem_submit, name='problem_submit'),
         url(r'^/resubmit/(?P<submission>\d+)$', problem.problem_submit, name='problem_submit'),
 
@@ -116,6 +123,19 @@ urlpatterns = [
 
         url(r'^/tickets$', ticket.ProblemTicketListView.as_view(), name='problem_ticket_list'),
         url(r'^/tickets/new$', ticket.NewProblemTicketView.as_view(), name='new_problem_ticket'),
+
+        url(r'^/manage/submission', include([
+            url('^$', problem_manage.ManageProblemSubmissionView.as_view(), name='problem_manage_submissions'),
+            url('^/rejudge$', problem_manage.RejudgeSubmissionsView.as_view(), name='problem_submissions_rejudge'),
+            url('^/rejudge/preview$', problem_manage.PreviewRejudgeSubmissionsView.as_view(),
+                name='problem_submissions_rejudge_preview'),
+            url('^/rejudge/success/(?P<task_id>[A-Za-z0-9-]*)$', problem_manage.rejudge_success,
+                name='problem_submissions_rejudge_success'),
+            url('^/rescore/all$', problem_manage.RescoreAllSubmissionsView.as_view(),
+                name='problem_submissions_rescore_all'),
+            url('^/rescore/success/(?P<task_id>[A-Za-z0-9-]*)$', problem_manage.rescore_success,
+                name='problem_submissions_rescore_success'),
+        ])),
     ])),
 
     url(r'^submissions/', paged_list_view(submission.AllSubmissions, 'all_submissions')),
@@ -133,7 +153,7 @@ urlpatterns = [
     url(r'^users/', include([
         url(r'^$', user.users, name='user_list'),
         url(r'^(?P<page>\d+)$', lambda request, page:
-        HttpResponsePermanentRedirect('%s?page=%s' % (reverse('user_list'), page))),
+            HttpResponsePermanentRedirect('%s?page=%s' % (reverse('user_list'), page))),
         url(r'^find$', user.user_ranking_redirect, name='user_ranking_redirect'),
     ])),
 
@@ -146,7 +166,8 @@ urlpatterns = [
             url(r'/ajax$', user.UserPerformancePointsAjax.as_view(), name='user_pp_ajax'),
         ])),
         url(r'^/submissions/', paged_list_view(submission.AllUserSubmissions, 'all_user_submissions_old')),
-        url(r'^/submissions/', lambda _, user: HttpResponsePermanentRedirect(reverse('all_user_submissions', args=[user]))),
+        url(r'^/submissions/', lambda _, user:
+            HttpResponsePermanentRedirect(reverse('all_user_submissions', args=[user]))),
 
         url(r'^/$', lambda _, user: HttpResponsePermanentRedirect(reverse('user_page', args=[user]))),
     ])),
@@ -171,7 +192,7 @@ urlpatterns = [
 
     url(r'^contest/(?P<contest>\w+)', include([
         url(r'^$', contests.ContestDetail.as_view(), name='contest_view'),
-        url(r'^/ranking/$', contests.contest_ranking, name='contest_ranking'),
+        url(r'^/ranking/$', contests.ContestRanking.as_view(), name='contest_ranking'),
         url(r'^/ranking/ajax$', contests.contest_ranking_ajax, name='contest_ranking_ajax'),
         url(r'^/join$', contests.ContestJoin.as_view(), name='contest_join'),
         url(r'^/leave$', contests.ContestLeave.as_view(), name='contest_leave'),
@@ -182,8 +203,9 @@ urlpatterns = [
         url(r'^/submissions/(?P<user>\w+)/(?P<problem>\w+)/',
             paged_list_view(submission.UserContestSubmissions, 'contest_user_submissions')),
 
-        url(r'^/participations$', contests.own_participation_list, name='contest_participation_own'),
-        url(r'^/participations/(?P<user>\w+)$', contests.participation_list, name='contest_participation'),
+        url(r'^/participations$', contests.ContestParticipationList.as_view(), name='contest_participation_own'),
+        url(r'^/participations/(?P<user>\w+)$',
+            contests.ContestParticipationList.as_view(), name='contest_participation'),
 
         url(r'^/$', lambda _, contest: HttpResponsePermanentRedirect(reverse('contest_view', args=[contest]))),
     ])),
@@ -314,6 +336,14 @@ urlpatterns = [
         url(r'^contest/$', ContestSelect2View.as_view(), name='contest_select2'),
         url(r'^comment/$', CommentSelect2View.as_view(), name='comment_select2'),
     ])),
+
+    url(r'^tasks/', include([
+        url(r'^status/(?P<task_id>[A-Za-z0-9-]*)$', tasks.task_status, name='task_status'),
+        url(r'^ajax_status$', tasks.task_status_ajax, name='task_status_ajax'),
+        url(r'^success$', tasks.demo_success),
+        url(r'^failure$', tasks.demo_failure),
+        url(r'^progress$', tasks.demo_progress),
+    ])),
 ]
 
 favicon_paths = ['apple-touch-icon-180x180.png', 'apple-touch-icon-114x114.png', 'android-chrome-72x72.png',
@@ -326,14 +356,9 @@ favicon_paths = ['apple-touch-icon-180x180.png', 'apple-touch-icon-114x114.png',
                  'mstile-310x150.png', 'apple-touch-icon-144x144.png', 'browserconfig.xml', 'manifest.json',
                  'apple-touch-icon-120x120.png', 'mstile-310x310.png']
 
-
-from django.templatetags.static import static
-from django.utils.functional import lazystr
-from django.views.generic import RedirectView
-
 for favicon in favicon_paths:
     urlpatterns.append(url(r'^%s$' % favicon, RedirectView.as_view(
-        url=lazystr(lambda: static('icons/' + favicon))
+        url=lazystr(lambda: static('icons/' + favicon)),
     )))
 
 handler404 = 'judge.views.error.error404'

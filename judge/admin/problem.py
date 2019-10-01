@@ -7,13 +7,12 @@ from django.db.models import Q
 from django.forms import ModelForm
 from django.urls import reverse_lazy
 from django.utils.html import format_html
-from django.utils.translation import gettext, ungettext, gettext_lazy as _
+from django.utils.translation import gettext, gettext_lazy as _, ungettext
 from reversion.admin import VersionAdmin
 
-from judge.models import Profile, LanguageLimit, ProblemTranslation, Problem, ProblemClarification
-from judge.models import Solution
-from judge.widgets import HeavySelect2MultipleWidget, Select2MultipleWidget, Select2Widget, \
-    HeavyPreviewAdminPageDownWidget, HeavyPreviewPageDownWidget, CheckboxSelectMultipleWithSelectAll
+from judge.models import LanguageLimit, Problem, ProblemClarification, ProblemTranslation, Profile, Solution
+from judge.widgets import CheckboxSelectMultipleWithSelectAll, HeavyPreviewAdminPageDownWidget, \
+    HeavyPreviewPageDownWidget, HeavySelect2MultipleWidget, Select2MultipleWidget, Select2Widget
 
 
 class ProblemForm(ModelForm):
@@ -26,7 +25,7 @@ class ProblemForm(ModelForm):
         self.fields['testers'].widget.can_add_related = False
         self.fields['banned_users'].widget.can_add_related = False
         self.fields['change_message'].widget.attrs.update({
-            'placeholder': gettext('Describe the changes you made (optional)')
+            'placeholder': gettext('Describe the changes you made (optional)'),
         })
 
     class Meta:
@@ -35,7 +34,8 @@ class ProblemForm(ModelForm):
             'curators': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
             'testers': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
             'banned_users': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
-            'organizations': HeavySelect2MultipleWidget(data_view='organization_select2', attrs={'style': 'width: 100%'}),
+            'organizations': HeavySelect2MultipleWidget(data_view='organization_select2',
+                                                        attrs={'style': 'width: 100%'}),
             'types': Select2MultipleWidget,
             'group': Select2Widget,
         }
@@ -47,8 +47,8 @@ class ProblemCreatorListFilter(admin.SimpleListFilter):
     title = parameter_name = 'creator'
 
     def lookups(self, request, model_admin):
-        return [(name, name) for name in Profile.objects.exclude(authored_problems=None)
-            .values_list('user__username', flat=True)]
+        queryset = Profile.objects.exclude(authored_problems=None).values_list('user__username', flat=True)
+        return [(name, name) for name in queryset]
 
     def queryset(self, request, queryset):
         if self.value() is None:
@@ -119,9 +119,8 @@ class ProblemAdmin(VersionAdmin):
         (None, {
             'fields': (
                 'code', 'name', 'is_public', 'is_manually_managed', 'date', 'authors', 'curators', 'testers',
-                'is_organization_private', 'organizations',
-                'description',
-                'license')
+                'is_organization_private', 'organizations', 'description', 'license',
+            ),
         }),
         (_('Social Media'), {'classes': ('collapse',), 'fields': ('og_image', 'summary')}),
         (_('Taxonomy'), {'fields': ('types', 'group')}),
@@ -129,7 +128,7 @@ class ProblemAdmin(VersionAdmin):
         (_('Limits'), {'fields': ('time_limit', 'memory_limit')}),
         (_('Language'), {'fields': ('allowed_languages',)}),
         (_('Justice'), {'fields': ('banned_users',)}),
-        (_('History'), {'fields': ('change_message',)})
+        (_('History'), {'fields': ('change_message',)}),
     )
     list_display = ['code', 'name', 'show_authors', 'points', 'is_public', 'show_public']
     ordering = ['code']
@@ -198,7 +197,7 @@ class ProblemAdmin(VersionAdmin):
                 ) `data` ON (`data`.id = prof.id)
                 SET prof.points = prof.points {} `data`.delta
                 WHERE `data`.delta IS NOT NULL
-            '''.format(', '.join(['%s'] * len(ids)), sign), ids)
+            '''.format(', '.join(['%s'] * len(ids)), sign), list(ids))
 
     def make_public(self, request, queryset):
         count = queryset.update(is_public=True)
@@ -227,7 +226,7 @@ class ProblemAdmin(VersionAdmin):
         if request.user.has_perm('judge.edit_public_problem'):
             access |= Q(is_public=True)
         if request.user.has_perm('judge.edit_own_problem'):
-            access |= Q(authors__id=request.user.profile.id) | Q(curators__id=request.user.profile.id)
+            access |= Q(authors__id=request.profile.id) | Q(curators__id=request.profile.id)
         return queryset.filter(access).distinct() if access else queryset.none()
 
     def has_change_permission(self, request, obj=None):
@@ -237,7 +236,7 @@ class ProblemAdmin(VersionAdmin):
             return True
         if not request.user.has_perm('judge.edit_own_problem'):
             return False
-        return obj.is_editor(request.user.profile)
+        return obj.is_editor(request.profile)
 
     def formfield_for_manytomany(self, db_field, request=None, **kwargs):
         if db_field.name == 'allowed_languages':
